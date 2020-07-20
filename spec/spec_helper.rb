@@ -10,6 +10,44 @@ end
 
 LOGGER = Logger.new($stdout, level: :debug)
 
+def debug(string)
+  LOGGER.debug "Thread ##{Thread.current.object_id} #{string}"
+end
+
+ENVIRONMENT_SPECS_COEFFICIENTS = {
+  -> { ENV['CI'] } => 1,
+  -> { RUBY_PLATFORM == 'java' } => 3,
+  ## https://cirrus-ci.com/build/6442339705028608
+  -> { RUBY_PLATFORM == 'java' && ENV['CI'] && is_a?(ShellWatchRun) } => 2,
+  -> { Gem::Platform.local.os == 'darwin' } => 1
+}.freeze
+
+def wait(seconds: 1, interval: 1, &block)
+  ENVIRONMENT_SPECS_COEFFICIENTS.each do |condition, coefficient|
+    interval *= coefficient if instance_exec(&condition)
+    seconds *= coefficient if instance_exec(&condition)
+  end
+  if block_given?
+    wait_with_block seconds, interval, &block
+  else
+    wait_without_block seconds
+  end
+end
+
+def wait_with_block(seconds, interval, &_block)
+  (seconds / interval).ceil.times do
+    break if yield
+
+    debug "sleep interval #{interval}"
+    sleep interval
+  end
+end
+
+def wait_without_block(seconds)
+  debug "sleep without intervals #{seconds}"
+  sleep seconds
+end
+
 class WatchRun
   TMP_DIR = File.join(__dir__, 'tmp')
 
@@ -30,12 +68,14 @@ class WatchRun
     File.write(@filename, 'content1') unless @action == :create
   end
 
-  def run
+  def run(make_changes_times: 1)
     start
 
-    make_changes
+    make_changes_times.times do
+      make_changes
 
-    wait seconds: 1
+      wait seconds: 2
+    end
 
     stop
   end
@@ -56,45 +96,6 @@ class WatchRun
     else
       File.write(@filename, 'content2')
     end
-  end
-
-  ENVIRONMENT_COEFFICIENTS = {
-    -> { ENV['CI'] } => 1,
-    -> { RUBY_PLATFORM == 'java' } => 3,
-    ## https://cirrus-ci.com/build/6442339705028608
-    -> { RUBY_PLATFORM == 'java' && ENV['CI'] && is_a?(ShellWatchRun) } => 2,
-    -> { Gem::Platform.local.os == 'darwin' } => 1
-  }.freeze
-
-  def wait(seconds:, interval:, &block)
-    seconds ||= 1
-    ENVIRONMENT_COEFFICIENTS.each do |condition, coefficient|
-      interval *= coefficient if instance_exec(&condition)
-      seconds *= coefficient if instance_exec(&condition)
-    end
-    if block_given?
-      wait_with_block seconds, interval, &block
-    else
-      wait_without_block seconds
-    end
-  end
-
-  def wait_with_block(seconds, interval, &_block)
-    (seconds / interval).ceil.times do
-      break if yield
-
-      debug "sleep interval #{interval}"
-      sleep interval
-    end
-  end
-
-  def wait_without_block(seconds)
-    debug "sleep without intervals #{seconds}"
-    sleep seconds
-  end
-
-  def debug(string)
-    LOGGER.debug "Thread ##{Thread.current.object_id} #{string}"
   end
 end
 
@@ -130,7 +131,7 @@ class RubyWatchRun < WatchRun
     super
   end
 
-  def wait(seconds: nil)
+  def wait(seconds: 1)
     super seconds: seconds, interval: filewatcher.interval
   end
 
@@ -181,8 +182,8 @@ class ShellWatchRun < WatchRun
 
   DUMP_FILE = File.join(TMP_DIR, 'dump')
 
-  def initialize(options:, dumper:, **args)
-    super(**args)
+  def initialize(options:, dumper:, dumper_args:, **rest_args)
+    super(**rest_args)
     @options = options
     @options[:interval] ||= 0.2
     @options_string =
@@ -190,6 +191,7 @@ class ShellWatchRun < WatchRun
     debug "options = #{@options_string}"
     @dumper = dumper
     debug "dumper = #{@dumper}"
+    @dumper_args = dumper_args.join(' ')
   end
 
   def start
@@ -222,7 +224,7 @@ class ShellWatchRun < WatchRun
 
   def spawn_filewatcher
     spawn_command = "#{EXECUTABLE} #{@options_string} \"#{@filename}\"" \
-      " \"ruby #{File.join(__dir__, "dumpers/#{@dumper}_dumper.rb")}\""
+      " \"ruby #{File.join(__dir__, "dumpers/#{@dumper}_dumper.rb #{@dumper_args}")}\""
     debug "spawn_command = #{spawn_command}"
     @pid = spawn spawn_command, **SPAWN_OPTIONS
 
@@ -234,7 +236,7 @@ class ShellWatchRun < WatchRun
   def make_changes
     super
 
-    wait do
+    wait seconds: 1 do
       debug "#{__method__}: File.exist?(DUMP_FILE) = #{File.exist?(DUMP_FILE)}"
       File.exist?(DUMP_FILE)
     end
@@ -259,7 +261,7 @@ class ShellWatchRun < WatchRun
     `ps -ho state -p #{@pid}`.sub('STAT', '').strip
   end
 
-  def wait(seconds: nil)
+  def wait(seconds: 1)
     super seconds: seconds, interval: @options[:interval]
   end
 end

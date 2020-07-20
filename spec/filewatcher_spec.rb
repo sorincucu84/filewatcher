@@ -14,10 +14,9 @@ describe Filewatcher do
     LOGGER.debug "FileUtils.rm_r #{WatchRun::TMP_DIR}"
     FileUtils.rm_r WatchRun::TMP_DIR
 
-    interval = 0.2
-    wait = 5
-    count = 0
-    sleep interval while File.exist?(WatchRun::TMP_DIR) && count < (wait / interval)
+    wait seconds: 5, interval: 0.2 do
+      File.exist?(WatchRun::TMP_DIR)
+    end
   end
 
   def initialize_filewatcher(path, options = {})
@@ -228,6 +227,10 @@ describe Filewatcher do
       watch_run.filewatcher.resume
     end
 
+    after do
+      watch_run.stop
+    end
+
     describe 'changes while paused' do
       # update block still should not have been called
       it { is_expected.to be_empty }
@@ -276,6 +279,7 @@ describe Filewatcher do
     let(:tmp_dir) { ShellWatchRun::TMP_DIR }
     let(:null_output) { Gem.win_platform? ? 'NUL' : '/dev/null' }
     let(:dumper) { :watched }
+    let(:dumper_args) { [] }
     let(:options) { {} }
     let(:watch_run) do
       ShellWatchRun.new(
@@ -283,7 +287,8 @@ describe Filewatcher do
         action: action,
         directory: directory,
         dumper: dumper,
-        options: options
+        options: options,
+        dumper_args: dumper_args
       )
     end
 
@@ -367,7 +372,7 @@ describe Filewatcher do
       end
     end
 
-    describe '`:immediate` option' do
+    describe '`--immediate` option' do
       let(:options) { { immediate: true } }
 
       include_context 'when started and stopped'
@@ -386,16 +391,50 @@ describe Filewatcher do
       include_examples 'dump file existence'
     end
 
-    describe '`:restart` option' do
+    describe '`--restart` option' do
       let(:options) { { restart: true } }
 
       before do
-        watch_run.run
+        watch_run.run(make_changes_times: 2)
       end
 
       include_examples 'dump file existence'
 
       include_examples 'dump file content'
+    end
+
+    describe '`--restart-signal` option' do
+      let(:dumper) { :signal }
+      let(:dumper_args) { [restart_signal] }
+
+      before do
+        stub_const 'RESTART_SIGNAL', restart_signal
+        watch_run.run(make_changes_times: 2)
+      end
+
+      context 'with `--restart` option' do
+        let(:expected_dump_file_content) { restart_signal }
+
+        context 'with default value' do
+          let(:restart_signal) { 'TERM' }
+          let(:options) { { restart: true } }
+          let(:expected_dump_file_existence) { true }
+
+          include_examples 'dump file existence'
+
+          include_examples 'dump file content'
+        end
+
+        context 'with custom value' do
+          let(:restart_signal) { 'INT' }
+          let(:options) { { restart: true, 'restart-signal' => restart_signal } }
+          let(:expected_dump_file_existence) { true }
+
+          include_examples 'dump file existence'
+
+          include_examples 'dump file content'
+        end
+      end
     end
   end
 end

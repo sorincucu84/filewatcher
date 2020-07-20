@@ -34,7 +34,7 @@ class Filewatcher
       result = File.mtime(filename)
       @logger.debug "File.mtime = #{result}"
       @logger.debug "stat #{filename}:"
-      system "stat #{filename}"
+      system "stat #{filename} --printf 'Modification: %y, Change: %z\n'"
       result
     end
 
